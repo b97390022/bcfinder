@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "bcfinder"
+version = "1.0.0"
+description = ""
+authors = ["BOSHAU CHEN <b97390022@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "3.11.3"
+line-bot-sdk = "^2.4.2"
+beautifulsoup4 = "^4.12.2"
+loguru = "^0.7.0"
+schedule = "^1.2.0"
+flask = "^2.3.2"
+pytz = "^2023.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

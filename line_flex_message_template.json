@@ -1,0 +1,88 @@
+{
+    "type": "bubble",
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "text",
+          "text": "",
+          "weight": "bold",
+          "size": "xl"
+        },
+        {
+          "type": "box",
+          "layout": "baseline",
+          "margin": "md",
+          "contents": [
+            {
+              "type": "text",
+              "text": "標題",
+              "flex": 1,
+              "margin": "md",
+              "size": "sm",
+              "color": "#2223F0",
+              "weight": "bold"
+            },
+            {
+              "type": "text",
+              "text": "",
+              "flex": 5,
+              "wrap": true
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "baseline",
+          "margin": "md",
+          "contents": [
+            {
+              "type": "text",
+              "text": "連結",
+              "flex": 1,
+              "margin": "md",
+              "size": "sm",
+              "color": "#2223F0",
+              "weight": "bold"
+            },
+            {
+              "type": "text",
+              "text": "link",
+              "flex": 5,
+              "wrap": true,
+              "style": "normal",
+              "decoration": "underline",
+              "action": {
+                "type": "uri",
+                "label": "action",
+                "uri": "https://reurl.cc/94164x"
+              }
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "baseline",
+          "margin": "md",
+          "contents": [
+            {
+              "type": "text",
+              "text": "日期",
+              "flex": 1,
+              "margin": "md",
+              "size": "sm",
+              "color": "#2223F0",
+              "weight": "bold"
+            },
+            {
+              "type": "text",
+              "text": "",
+              "flex": 5,
+              "wrap": true
+            }
+          ]
+        }
+      ]
+    }
+  }

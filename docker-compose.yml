@@ -1,0 +1,10 @@
+services:
+  bcfinder:
+    build:
+      context: .
+    image: shau1943/bcfinder:latest
+    container_name: bcfinder
+    restart: unless-stopped
+    volumes:
+        - ./bcdb.db:/bcfinder/bcdb.db
+        - ./config.json:/bcfinder/config.json
