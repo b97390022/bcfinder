@@ -35,7 +35,7 @@ class DB:
 
     def init_db(self):
         # 中山國中
-        q = """CREATE TABLE IF NOT EXISTS zsjhs 
+        q = """CREATE TABLE IF NOT EXISTS zsjhs
             (
                 序號 VARCHAR(10),
                 標題 VARCHAR(100),
@@ -50,7 +50,18 @@ class DB:
         """
         self.execute(q)
         # 玉成國小
-        q = """CREATE TABLE IF NOT EXISTS yhes 
+        q = """CREATE TABLE IF NOT EXISTS yhes
+            (
+                title VARCHAR(100),
+                link VARCHAR(100),
+                published VARCHAR(20),
+                description TEXT,
+                md5 VARCHAR(10) PRIMARY KEY
+            );
+        """
+        self.execute(q)
+        # 三民國中
+        q = """CREATE TABLE IF NOT EXISTS smjh
             (
                 title VARCHAR(100),
                 link VARCHAR(100),
@@ -155,6 +166,8 @@ class ZSJHSWorker(Worker):
     def __init__(self, db: DB, line_worker: LineWorker) -> None:
         super().__init__()
         self.name: str = "中山國中"
+        self.table_name: str = "zsjhs"
+        self.title_color: str = "#f5a142"
         self.base_url: str = "http://www.csjhs.tp.edu.tw/news/"
         self.zsjhs_url: str = "u_news_v1.asp?id={F246F2F4-4F1E-42DA-B518-5FB731FD672F}"
         self.db: DB = db
@@ -166,6 +179,7 @@ class ZSJHSWorker(Worker):
     def format_message(self, columns, row):
         template = self.message_template
         template["body"]["contents"][0]["text"] = self.message_title
+        template["body"]["contents"][0]["color"] = self.title_color
         template["body"]["contents"][1]["contents"][1]["text"] = row[
             columns.index("標題")
         ]
@@ -243,7 +257,7 @@ class ZSJHSWorker(Worker):
         return columns, rows
 
     def insert_to_db(self, cols, rows):
-        return self.db.insert(cols, rows, "zsjhs", "md5")
+        return self.db.insert(cols, rows, self.table_name, "md5")
 
     def main(self):
         page_content = self.get_content(urljoin(self.base_url, self.zsjhs_url))
@@ -262,16 +276,12 @@ class ZSJHSWorker(Worker):
             )
 
 
-class YHESWorker(Worker):
+class RSSWorker(Worker):
     def __init__(self, db: DB, line_worker: LineWorker) -> None:
         super().__init__()
-        self.name: str = "玉成國小"
         self.cols: list = ["title", "link", "published", "description", "md5"]
-        self.rss_url: str = "https://www.yhes.tp.edu.tw/nss/main/feeder/5a9759adef37531ea27bf1b0/Cq0o5XU2162?f=normal&vector=private&static=false"
         self.db: DB = db
         self.line_worker: LineWorker = line_worker
-        self.message_title = f"羽球場-{self.name}"
-        self.filter_pattern = r"羽球|場地|租借"
         self.published_format_string_in = "%a, %d %b %Y %H:%M:%S %Z"
         if system == "Windows":
             self.published_format_string_out = "%Y/%#m/%#d"
@@ -304,12 +314,10 @@ class YHESWorker(Worker):
     def filter_rss_data(self, rss_data: list):
         return list(filter(lambda x: re.search(self.filter_pattern, x[0]), rss_data))
 
-    def insert_to_db(self, cols, rows):
-        return self.db.insert(cols, rows, "yhes", "md5")
-
     def format_message(self, columns, row):
         template = self.message_template
         template["body"]["contents"][0]["text"] = self.message_title
+        template["body"]["contents"][0]["color"] = self.title_color
         template["body"]["contents"][1]["contents"][1]["text"] = row[
             columns.index("title")
         ]
@@ -320,6 +328,51 @@ class YHESWorker(Worker):
             columns.index("published")
         ]
         return template
+
+
+class YHESWorker(RSSWorker):
+    def __init__(self, db: DB, line_worker: LineWorker) -> None:
+        super().__init__(db, line_worker)
+        self.name: str = "玉成國小"
+        self.table_name: str = "yhes"
+        self.title_color: str = "#51f542"
+        self.rss_url: str = "https://www.yhes.tp.edu.tw/nss/main/feeder/5a9759adef37531ea27bf1b0/Cq0o5XU2162?f=normal&vector=private&static=false"
+        self.message_title = f"羽球場-{self.name}"
+        self.filter_pattern = r"羽球|場地|租借"
+
+    def insert_to_db(self, cols, rows):
+        return self.db.insert(cols, rows, self.table_name, "md5")
+
+    def main(self):
+        d = self.get_rss_data()
+        rss_data = self.extract_rss_data(d)
+        rss_data = self.filter_rss_data(rss_data)
+        inserted = self.insert_to_db(self.cols, rss_data)
+        if not inserted:
+            logger.info(f"沒有找到{self.name}相關的通知。")
+        for row in inserted:
+            self.line_worker.send_flex_message(
+                to="group_chat",
+                alt_text=f"羽球場地通知-{self.name}",
+                flex_message=self.format_message(self.cols, row),
+            )
+            logger.info(
+                f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
+            )
+
+
+class SMJHWorker(RSSWorker):
+    def __init__(self, db: DB, line_worker: LineWorker) -> None:
+        super().__init__(db, line_worker)
+        self.name: str = "三民國中"
+        self.table_name: str = "smjh"
+        self.title_color: str = "#4287f5"
+        self.rss_url: str = "https://www.smjh.tp.edu.tw/nss/main/feeder/5abf2d62aa93092cee58ceb4/P6nJedk3190?f=normal&%240=KJQUup08386&vector=private&static=false"
+        self.message_title = f"羽球場-{self.name}"
+        self.filter_pattern = r"羽球|場地|租借"
+
+    def insert_to_db(self, cols, rows):
+        return self.db.insert(cols, rows, self.table_name, "md5")
 
     def main(self):
         d = self.get_rss_data()
@@ -358,8 +411,9 @@ if __name__ == "__main__":
     line_worker = LineWorker()
     zsjhs_worker = ZSJHSWorker(db, line_worker)
     yhes_worker = YHESWorker(db, line_worker)
+    smjh_worker = SMJHWorker(db, line_worker)
     schedule.every(CONFIG.get("default_schedule_job_interval")).seconds.do(
-        lambda: run_all([zsjhs_worker, yhes_worker])
+        lambda: run_all([zsjhs_worker, yhes_worker, smjh_worker])
     )
 
     logger.info(
