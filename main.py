@@ -16,6 +16,7 @@ import sys
 import sqlite3
 import time
 import traceback
+from typing import Union
 from urllib.parse import urljoin
 
 system = platform.system()
@@ -28,6 +29,7 @@ logger.remove(0)
 logger.add(sys.stderr, level="INFO")
 
 
+### database worker ###
 class DB:
     def __init__(self) -> None:
         self.db_name = "bcdb.db"
@@ -107,18 +109,37 @@ class DB:
         return inserted
 
 
+### message workers ###
 class LineWorker:
     def __init__(self) -> None:
         self.admin_id = CONFIG.get("line_admin_id")
         self.group_chat_id = CONFIG.get("line_group_chat_id")
         self.api_client = LineBotApi(CONFIG.get("line_channel_access_token"))
         self.handler_client = WebhookHandler(CONFIG.get("line_channel_secret"))
+        with open("line_flex_message_template.json", "r", encoding="utf-8") as f:
+            self.flex_message_template = json.load(f)
 
     def get_id(self, to: str):
         if to == "admin":
             return self.admin_id
         elif to == "group_chat":
             return self.group_chat_id
+
+    def format_flex_message(
+        self,
+        message_title: str,
+        title_color: str,
+        title: str,
+        link: str,
+        published: str,
+    ):
+        template = self.flex_message_template
+        template["body"]["contents"][0]["text"] = message_title
+        template["body"]["contents"][0]["color"] = title_color
+        template["body"]["contents"][1]["contents"][1]["text"] = title
+        template["body"]["contents"][2]["contents"][1]["action"]["uri"] = link
+        template["body"]["contents"][3]["contents"][1]["text"] = published
+        return template
 
     def send_text_message(self, to: str, text: str):
         id_ = self.get_id(to=to)
@@ -131,6 +152,11 @@ class LineWorker:
         )
 
 
+class DiscordWorker:
+    pass
+
+
+### base worker ###
 class Worker:
     def __init__(self) -> None:
         self.reurl_post_uri = CONFIG.get("reurl_post_uri")
@@ -162,34 +188,36 @@ class Worker:
         return md5.hexdigest()
 
 
+### workers ###
 class ZSJHSWorker(Worker):
-    def __init__(self, db: DB, line_worker: LineWorker) -> None:
+    def __init__(
+        self, db: DB, message_worker: Union[LineWorker, DiscordWorker]
+    ) -> None:
         super().__init__()
         self.name: str = "中山國中"
+        self.db: DB = db
+        self.message_worker: Union[LineWorker, DiscordWorker] = message_worker
         self.table_name: str = "zsjhs"
         self.title_color: str = "#f5a142"
         self.base_url: str = "http://www.csjhs.tp.edu.tw/news/"
         self.zsjhs_url: str = "u_news_v1.asp?id={F246F2F4-4F1E-42DA-B518-5FB731FD672F}"
-        self.db: DB = db
-        self.line_worker: LineWorker = line_worker
         self.message_title = f"羽球場-{self.name}"
-        with open("line_flex_message_template.json", "r", encoding="utf-8") as f:
-            self.message_template = json.load(f)
 
-    def format_message(self, columns, row):
-        template = self.message_template
-        template["body"]["contents"][0]["text"] = self.message_title
-        template["body"]["contents"][0]["color"] = self.title_color
-        template["body"]["contents"][1]["contents"][1]["text"] = row[
-            columns.index("標題")
-        ]
-        template["body"]["contents"][2]["contents"][1]["action"][
-            "uri"
-        ] = self.get_shorten_url(row[columns.index("標題連結")])
-        template["body"]["contents"][3]["contents"][1]["text"] = row[
-            columns.index("發布日期")
-        ]
-        return template
+    def send_message(self, col, row):
+        if isinstance(self.message_worker, LineWorker):
+            self.message_worker.send_flex_message(
+                to="group_chat",
+                alt_text=f"羽球場地通知-{self.name}",
+                flex_message=self.message_worker.format_flex_message(
+                    message_title=self.message_title,
+                    title_color=self.title_color,
+                    title=row[col.index("標題")],
+                    link=self.get_shorten_url(row[col.index("標題連結")]),
+                    published=row[col.index("發布日期")],
+                ),
+            )
+        elif isinstance(self.message_worker, DiscordWorker):
+            pass
 
     def extract_columns(self, soup: BeautifulSoup, q: str, to_exclude: list):
         table = soup.find("table", {"summary": re.compile(q)})
@@ -266,32 +294,25 @@ class ZSJHSWorker(Worker):
         if not inserted:
             logger.info(f"沒有找到{self.name}相關的通知。")
         for row in inserted:
-            self.line_worker.send_flex_message(
-                to="group_chat",
-                alt_text=f"羽球場地通知-{self.name}",
-                flex_message=self.format_message(cols, row),
-            )
+            self.send_message(cols, row)
             logger.info(
                 f'發送訊息: 標題: {row[cols.index("標題")]}, 發布日期: {row[cols.index("發布日期")]}'
             )
 
 
 class RSSWorker(Worker):
-    def __init__(self, db: DB, line_worker: LineWorker) -> None:
+    def __init__(self) -> None:
         super().__init__()
+        self.filter_pattern = r"羽球|場地|租借"
         self.cols: list = ["title", "link", "published", "description", "md5"]
-        self.db: DB = db
-        self.line_worker: LineWorker = line_worker
         self.published_format_string_in = "%a, %d %b %Y %H:%M:%S %Z"
         if system == "Windows":
             self.published_format_string_out = "%Y/%#m/%#d"
         else:
             self.published_format_string_out = "%Y/%-m/%-d"
-        with open("line_flex_message_template.json", "r", encoding="utf-8") as f:
-            self.message_template = json.load(f)
 
-    def get_rss_data(self):
-        return feedparser.parse(self.rss_url)
+    def get_rss_data(self, url: str):
+        return feedparser.parse(url)
 
     def extract_rss_data(self, d):
         rss_data = []
@@ -314,26 +335,15 @@ class RSSWorker(Worker):
     def filter_rss_data(self, rss_data: list):
         return list(filter(lambda x: re.search(self.filter_pattern, x[0]), rss_data))
 
-    def format_message(self, columns, row):
-        template = self.message_template
-        template["body"]["contents"][0]["text"] = self.message_title
-        template["body"]["contents"][0]["color"] = self.title_color
-        template["body"]["contents"][1]["contents"][1]["text"] = row[
-            columns.index("title")
-        ]
-        template["body"]["contents"][2]["contents"][1]["action"][
-            "uri"
-        ] = self.get_shorten_url(row[columns.index("link")])
-        template["body"]["contents"][3]["contents"][1]["text"] = row[
-            columns.index("published")
-        ]
-        return template
-
 
 class YHESWorker(RSSWorker):
-    def __init__(self, db: DB, line_worker: LineWorker) -> None:
-        super().__init__(db, line_worker)
+    def __init__(
+        self, db: DB, message_worker: Union[LineWorker, DiscordWorker]
+    ) -> None:
+        super().__init__()
         self.name: str = "玉成國小"
+        self.db: DB = db
+        self.message_worker: Union[LineWorker, DiscordWorker] = message_worker
         self.table_name: str = "yhes"
         self.title_color: str = "#51f542"
         self.rss_url: str = "https://www.yhes.tp.edu.tw/nss/main/feeder/5a9759adef37531ea27bf1b0/Cq0o5XU2162?f=normal&vector=private&static=false"
@@ -343,28 +353,42 @@ class YHESWorker(RSSWorker):
     def insert_to_db(self, cols, rows):
         return self.db.insert(cols, rows, self.table_name, "md5")
 
+    def send_message(self, col, row):
+        if isinstance(self.message_worker, LineWorker):
+            self.message_worker.send_flex_message(
+                to="group_chat",
+                alt_text=f"羽球場地通知-{self.name}",
+                flex_message=self.message_worker.format_flex_message(
+                    message_title=self.message_title,
+                    title_color=self.title_color,
+                    title=row[col.index("title")],
+                    link=self.get_shorten_url(row[col.index("link")]),
+                    published=row[col.index("published")],
+                ),
+            )
+        elif isinstance(self.message_worker, DiscordWorker):
+            pass
+
     def main(self):
-        d = self.get_rss_data()
+        d = self.get_rss_data(self.rss_url)
         rss_data = self.extract_rss_data(d)
         rss_data = self.filter_rss_data(rss_data)
         inserted = self.insert_to_db(self.cols, rss_data)
         if not inserted:
             logger.info(f"沒有找到{self.name}相關的通知。")
         for row in inserted:
-            self.line_worker.send_flex_message(
-                to="group_chat",
-                alt_text=f"羽球場地通知-{self.name}",
-                flex_message=self.format_message(self.cols, row),
-            )
+            self.send_message(self.cols, row)
             logger.info(
                 f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
             )
 
 
 class SMJHWorker(RSSWorker):
-    def __init__(self, db: DB, line_worker: LineWorker) -> None:
-        super().__init__(db, line_worker)
+    def __init__(self, db: DB, message_worker: LineWorker) -> None:
+        super().__init__()
         self.name: str = "三民國中"
+        self.db: DB = db
+        self.message_worker: Union[LineWorker, DiscordWorker] = message_worker
         self.table_name: str = "smjh"
         self.title_color: str = "#4287f5"
         self.rss_url: str = "https://www.smjh.tp.edu.tw/nss/main/feeder/5abf2d62aa93092cee58ceb4/P6nJedk3190?f=normal&%240=KJQUup08386&vector=private&static=false"
@@ -374,28 +398,75 @@ class SMJHWorker(RSSWorker):
     def insert_to_db(self, cols, rows):
         return self.db.insert(cols, rows, self.table_name, "md5")
 
+    def send_message(self, col, row):
+        if isinstance(self.message_worker, LineWorker):
+            self.message_worker.send_flex_message(
+                to="group_chat",
+                alt_text=f"羽球場地通知-{self.name}",
+                flex_message=self.message_worker.format_flex_message(
+                    message_title=self.message_title,
+                    title_color=self.title_color,
+                    title=row[col.index("title")],
+                    link=self.get_shorten_url(row[col.index("link")]),
+                    published=row[col.index("published")],
+                ),
+            )
+        elif isinstance(self.message_worker, DiscordWorker):
+            pass
+
     def main(self):
-        d = self.get_rss_data()
+        d = self.get_rss_data(self.rss_url)
         rss_data = self.extract_rss_data(d)
         rss_data = self.filter_rss_data(rss_data)
         inserted = self.insert_to_db(self.cols, rss_data)
         if not inserted:
             logger.info(f"沒有找到{self.name}相關的通知。")
         for row in inserted:
-            self.line_worker.send_flex_message(
-                to="group_chat",
-                alt_text=f"羽球場地通知-{self.name}",
-                flex_message=self.format_message(self.cols, row),
-            )
+            self.send_message(self.cols, row)
             logger.info(
                 f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
             )
 
 
-if __name__ == "__main__":
+class BCFinder:
+    def __init__(
+        self,
+        db: DB,
+        message_worker: Union[LineWorker, DiscordWorker],
+        workers: list[str],
+    ) -> None:
+        self.db = db()
+        self.message_worker = message_worker()
+        self.worker_type: dict = {
+            "中山國中": ZSJHSWorker,
+            "玉成國小": YHESWorker,
+            "三民國中": SMJHWorker,
+        }
+        assert len(workers) > 0, f"請至少註冊一種worker: {self.worker_type.keys()}"
+        assert (
+            len(
+                _invalid_workers := [
+                    worker for worker in workers if worker not in self.worker_type
+                ]
+            )
+        ) == 0, f"註冊的worker無法辨識: {_invalid_workers}"
+        self.workers: list[
+            Union[ZSJHSWorker, YHESWorker, SMJHWorker]
+        ] = self.create_workers(self.db, self.message_worker, workers)
 
-    def run_all(workers: list):
-        for worker in workers:
+    def create_workers(
+        self, db: DB, message_worker: Union[LineWorker, DiscordWorker], workers: list
+    ):
+        return [self.worker_type[worker](db, message_worker) for worker in workers]
+
+    def send_message(self, text: str):
+        if isinstance(self.message_worker, LineWorker):
+            self.message_worker.send_text_message(to="admin", text=text)
+        elif isinstance(self.message_worker, DiscordWorker):
+            pass
+
+    def run_all(self):
+        for worker in self.workers:
             try:
                 logger.info(
                     f"Run Scheduled Job: {datetime.datetime.now(pytz.timezone(CONFIG.get('tz')))} with {worker.name}"
@@ -403,17 +474,15 @@ if __name__ == "__main__":
                 worker.main()
             except Exception as e:
                 logger.exception(e)
-                line_worker.send_text_message(
-                    to="admin", text=str(traceback.format_exc())
-                )
+                self.send_message(text=str(traceback.format_exc()))
 
-    db = DB()
-    line_worker = LineWorker()
-    zsjhs_worker = ZSJHSWorker(db, line_worker)
-    yhes_worker = YHESWorker(db, line_worker)
-    smjh_worker = SMJHWorker(db, line_worker)
+
+if __name__ == "__main__":
+    bcfinder = BCFinder(
+        db=DB, message_worker=LineWorker, workers=["中山國中", "玉成國小", "三民國中"]
+    )
     schedule.every(CONFIG.get("default_schedule_job_interval")).seconds.do(
-        lambda: run_all([zsjhs_worker, yhes_worker, smjh_worker])
+        bcfinder.run_all
     )
 
     logger.info(
