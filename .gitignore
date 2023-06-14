@@ -56,3 +56,4 @@ Thumbs.db
 .vscode
 config.json
 bcdb.db
+test.py

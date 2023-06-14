@@ -1,6 +1,8 @@
+import asyncio
 from bs4 import BeautifulSoup
 import contextlib
 import datetime
+import discord
 import feedparser
 import json
 import hashlib
@@ -16,7 +18,7 @@ import sys
 import sqlite3
 import time
 import traceback
-from typing import Union
+from typing import Union, Literal
 from urllib.parse import urljoin
 
 system = platform.system()
@@ -153,7 +155,30 @@ class LineWorker:
 
 
 class DiscordWorker:
-    pass
+    def __init__(self) -> None:
+        self.token: str = CONFIG.get("discord_token")
+        self.channel_id: int = 1118431548023250966
+
+    async def send_message(self, channel_id: int, message: str):
+        client = discord.Client(intents=discord.Intents.default())
+
+        # Event handler for when the client is ready
+        @client.event
+        async def on_ready():
+            # Fetch the desired channel
+            channel = client.get_channel(channel_id)
+
+            # Send the message
+            await channel.send(message)
+
+            # Close the client connection
+            await client.close()
+
+        # Start the client
+        await client.start(self.token)
+
+    # # Run the send_message function
+    # asyncio.run(send_message())
 
 
 ### base worker ###
@@ -433,7 +458,7 @@ class BCFinder:
         self,
         db: DB,
         message_worker: Union[LineWorker, DiscordWorker],
-        workers: list[str],
+        workers: list[Literal["中山國中", "玉成國小", "三民國中"]],
     ) -> None:
         self.db = db()
         self.message_worker = message_worker()
