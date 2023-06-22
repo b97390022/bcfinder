@@ -89,26 +89,25 @@ class DB:
             cur.execute(sql)
             return cur.fetchall()
 
-    def insert(self, cols, rows, tbname: str, index_label: str):
-        inserted = []
+    def exist(self, cols, row, tbname: str, index_label: str):
         with contextlib.closing(
             sqlite3.connect(self.db_name)
         ) as con, con, contextlib.closing(con.cursor()) as cur:
             md5_index = cols.index("md5")
-            for row in rows:
-                md5 = row[md5_index]
-                query = f"SELECT COUNT(*) FROM {tbname} WHERE {index_label} = ?"
-                cur.execute(query, (md5,))
-                result = cur.fetchone()[0]
-                if result > 0:
-                    continue
-                else:
-                    cur.execute(
-                        f"INSERT INTO {tbname} VALUES({','.join(['?' for i in range(len(cols))])})",
-                        row,
-                    )
-                    inserted.append(row)
-        return inserted
+            md5 = row[md5_index]
+            query = f"SELECT COUNT(*) FROM {tbname} WHERE {index_label} = ?"
+            cur.execute(query, (md5,))
+            result = cur.fetchone()[0]
+            return result > 0
+
+    def insert(self, cols, row, tbname: str):
+        with contextlib.closing(
+            sqlite3.connect(self.db_name)
+        ) as con, con, contextlib.closing(con.cursor()) as cur:
+            cur.execute(
+                f"INSERT INTO {tbname} VALUES({','.join(['?' for i in range(len(cols))])})",
+                row,
+            )
 
 
 ### message workers ###
@@ -116,7 +115,7 @@ class LineWorker:
     def __init__(self) -> None:
         self.admin_id = CONFIG.get("line_admin_id")
         self.group_chat_id = CONFIG.get("line_group_chat_id")
-        self.api_client = LineBotApi(CONFIG.get("line_channel_access_token"))
+        self.channel_access_token = CONFIG.get("line_channel_access_token")
         self.handler_client = WebhookHandler(CONFIG.get("line_channel_secret"))
         with open("line_flex_message_template.json", "r", encoding="utf-8") as f:
             self.flex_message_template = json.load(f)
@@ -145,11 +144,13 @@ class LineWorker:
 
     def send_text_message(self, to: str, text: str):
         id_ = self.get_id(to=to)
-        self.api_client.push_message(id_, TextSendMessage(text))
+        api_client = LineBotApi(self.channel_access_token)
+        api_client.push_message(id_, TextSendMessage(text))
 
     def send_flex_message(self, to: str, alt_text: str, flex_message):
         id_ = self.get_id(to=to)
-        self.api_client.push_message(
+        api_client = LineBotApi(self.channel_access_token)
+        api_client.push_message(
             id_, FlexSendMessage(alt_text=alt_text, contents=flex_message)
         )
 
@@ -309,20 +310,27 @@ class ZSJHSWorker(Worker):
             row.append(md5)
         return columns, rows
 
-    def insert_to_db(self, cols, rows):
-        return self.db.insert(cols, rows, self.table_name, "md5")
+    def insert_to_db(self, cols, row):
+        return self.db.insert(cols, row, self.table_name)
 
     def main(self):
-        page_content = self.get_content(urljoin(self.base_url, self.zsjhs_url))
-        cols, rows = self.combine_post_and_content(page_content)
-        inserted = self.insert_to_db(cols, rows)
-        if not inserted:
-            logger.info(f"沒有找到{self.name}相關的通知。")
-        for row in inserted:
-            self.send_message(cols, row)
-            logger.info(
-                f'發送訊息: 標題: {row[cols.index("標題")]}, 發布日期: {row[cols.index("發布日期")]}'
-            )
+        try:
+            page_content = self.get_content(urljoin(self.base_url, self.zsjhs_url))
+            cols, rows = self.combine_post_and_content(page_content)
+            count = 0
+            for row in rows:
+                if not self.db.exist(cols, row, self.table_name, "md5"):
+                    count += 1
+                    self.send_message(cols, row)
+                    self.insert_to_db(cols, row)
+                    logger.info(
+                        f'發送訊息: 標題: {row[cols.index("標題")]}, 發布日期: {row[cols.index("發布日期")]}'
+                    )
+            if count == 0:
+                logger.info(f"沒有找到{self.name}相關的通知。")
+        except Exception as e:
+            logger.exception(e)
+            raise
 
 
 class RSSWorker(Worker):
@@ -375,8 +383,8 @@ class YHESWorker(RSSWorker):
         self.message_title = f"羽球場-{self.name}"
         self.filter_pattern = r"羽球|場地|租借"
 
-    def insert_to_db(self, cols, rows):
-        return self.db.insert(cols, rows, self.table_name, "md5")
+    def insert_to_db(self, cols, row):
+        return self.db.insert(cols, row, self.table_name)
 
     def send_message(self, col, row):
         if isinstance(self.message_worker, LineWorker):
@@ -395,17 +403,24 @@ class YHESWorker(RSSWorker):
             pass
 
     def main(self):
-        d = self.get_rss_data(self.rss_url)
-        rss_data = self.extract_rss_data(d)
-        rss_data = self.filter_rss_data(rss_data)
-        inserted = self.insert_to_db(self.cols, rss_data)
-        if not inserted:
-            logger.info(f"沒有找到{self.name}相關的通知。")
-        for row in inserted:
-            self.send_message(self.cols, row)
-            logger.info(
-                f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
-            )
+        try:
+            d = self.get_rss_data(self.rss_url)
+            rss_data = self.extract_rss_data(d)
+            rss_data = self.filter_rss_data(rss_data)
+            count = 0
+            for row in rss_data:
+                if not self.db.exist(self.cols, row, self.table_name, "md5"):
+                    count += 1
+                    self.send_message(self.cols, row)
+                    self.insert_to_db(self.cols, row)
+                    logger.info(
+                        f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
+                    )
+            if count == 0:
+                logger.info(f"沒有找到{self.name}相關的通知。")
+        except Exception as e:
+            logger.exception(e)
+            raise
 
 
 class SMJHWorker(RSSWorker):
@@ -420,8 +435,8 @@ class SMJHWorker(RSSWorker):
         self.message_title = f"羽球場-{self.name}"
         self.filter_pattern = r"羽球|場地|租借"
 
-    def insert_to_db(self, cols, rows):
-        return self.db.insert(cols, rows, self.table_name, "md5")
+    def insert_to_db(self, cols, row):
+        return self.db.insert(cols, row, self.table_name)
 
     def send_message(self, col, row):
         if isinstance(self.message_worker, LineWorker):
@@ -440,17 +455,24 @@ class SMJHWorker(RSSWorker):
             pass
 
     def main(self):
-        d = self.get_rss_data(self.rss_url)
-        rss_data = self.extract_rss_data(d)
-        rss_data = self.filter_rss_data(rss_data)
-        inserted = self.insert_to_db(self.cols, rss_data)
-        if not inserted:
-            logger.info(f"沒有找到{self.name}相關的通知。")
-        for row in inserted:
-            self.send_message(self.cols, row)
-            logger.info(
-                f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
-            )
+        try:
+            d = self.get_rss_data(self.rss_url)
+            rss_data = self.extract_rss_data(d)
+            rss_data = self.filter_rss_data(rss_data)
+            count = 0
+            for row in rss_data:
+                if not self.db.exist(self.cols, row, self.table_name, "md5"):
+                    count += 1
+                    self.send_message(self.cols, row)
+                    self.insert_to_db(self.cols, row)
+                    logger.info(
+                        f'發送訊息: 標題: {row[self.cols.index("title")]}, 發布日期: {row[self.cols.index("published")]}'
+                    )
+            if count == 0:
+                logger.info(f"沒有找到{self.name}相關的通知。")
+        except Exception as e:
+            logger.exception(e)
+            raise
 
 
 class BCFinder:
