@@ -3,7 +3,7 @@
 BCFinderis a Python library scheduling to find Badminton course information,
 and push notification to line group.
 
-[![Docker Build](https://github.com/b97390022/bcfinder/actions/workflows/basic.yaml/badge.svg)](https://github.com/b97390022/bcfinder/actions/workflows/basic.yaml)
+[![Docker Build](https://github.com/b97390022/bcfinder/actions/workflows/basic.yml/badge.svg)](https://github.com/b97390022/bcfinder/actions/workflows/basic.yml)
 
 ## Create Confin.json
 Please place the config.json file into the bcfinder folder and replace the corresponding values.
