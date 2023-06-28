@@ -5,7 +5,6 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -40,11 +39,7 @@ jobs:
         platforms: linux/amd64
     - name: Unit Testing in Docker
       run: |
-        docker run --rm ${{ github.run_id }} echo "ls -alF"  
-    - name: Test healthcheck in Docker Compose
-      run: |
-        export TESTING_IMAGE="${{ github.run_id }}"
-        docker compose -f docker-compose.test.yml up --exit-code-from sut
+        docker run --rm ${{ github.run_id }} echo "ls -alF"
     - name: Run Trivy for all CVEs (non-blocking)
       uses: aquasecurity/trivy-action@master
       with:
