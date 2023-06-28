@@ -15,7 +15,7 @@ CMD ["python", "-m", "main"]
 FROM base as test
 
 #layer test tools and assets on top as optional test stage
-RUN apt-get update && apt-get install -y curl apache2-utils
+RUN apt-get update && apt-get install -y curl
 
 #########################
 FROM base as final
