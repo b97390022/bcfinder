@@ -18,7 +18,7 @@ import sys
 import sqlite3
 import time
 import traceback
-from typing import Union, Literal
+from typing import Union, Literal, Optional
 from urllib.parse import urljoin
 
 system = platform.system()
@@ -158,28 +158,44 @@ class LineWorker:
 class DiscordWorker:
     def __init__(self) -> None:
         self.token: str = CONFIG.get("discord_token")
+        self.admin_channel_id: int = 1123490073900494938
         self.channel_id: int = 1118431548023250966
 
-    async def send_message(self, channel_id: int, message: str):
-        client = discord.Client(intents=discord.Intents.default())
+    def format_message(
+        self,
+        title: str,
+        message_title: str,
+        link: str,
+        published: str,
+    ):
+        return f"**{title}**\n標題: {message_title}\n連結: {link}\n日期: {published}"
 
-        # Event handler for when the client is ready
+    async def send_message(self, to: str, text: str = ""):
+        client = discord.Client(intents=discord.Intents.default())
+        if to == "admin":
+            channel_id = self.admin_channel_id
+        elif to == "normal":
+            channel_id = self.channel_id
+
         @client.event
         async def on_ready():
-            # Fetch the desired channel
+            nonlocal channel_id
+            nonlocal text
+
             channel = client.get_channel(channel_id)
 
-            # Send the message
-            await channel.send(message)
+            if channel:
+                # Send the message to the channel
+                await channel.send(text)
+                logger.info("Message sent successfully.")
+            else:
+                logger.error("Invalid channel ID.")
 
             # Close the client connection
             await client.close()
 
-        # Start the client
+        # Run the client asynchronously
         await client.start(self.token)
-
-    # # Run the send_message function
-    # asyncio.run(send_message())
 
 
 ### base worker ###
@@ -243,7 +259,17 @@ class ZSJHSWorker(Worker):
                 ),
             )
         elif isinstance(self.message_worker, DiscordWorker):
-            pass
+            asyncio.run(
+                self.message_worker.send_message(
+                    to="normal",
+                    text=self.message_worker.format_message(
+                        title=self.message_title,
+                        message_title=row[col.index("標題")],
+                        link=self.get_shorten_url(row[col.index("標題連結")]),
+                        published=row[col.index("發布日期")],
+                    ),
+                )
+            )
 
     def extract_columns(self, soup: BeautifulSoup, q: str, to_exclude: list):
         table = soup.find("table", {"summary": re.compile(q)})
@@ -400,7 +426,17 @@ class YHESWorker(RSSWorker):
                 ),
             )
         elif isinstance(self.message_worker, DiscordWorker):
-            pass
+            asyncio.run(
+                self.message_worker.send_message(
+                    to="normal",
+                    text=self.message_worker.format_message(
+                        title=self.message_title,
+                        message_title=row[col.index("title")],
+                        link=self.get_shorten_url(row[col.index("link")]),
+                        published=row[col.index("published")],
+                    ),
+                )
+            )
 
     def main(self):
         try:
@@ -452,7 +488,17 @@ class SMJHWorker(RSSWorker):
                 ),
             )
         elif isinstance(self.message_worker, DiscordWorker):
-            pass
+            asyncio.run(
+                self.message_worker.send_message(
+                    to="normal",
+                    text=self.message_worker.format_message(
+                        title=self.message_title,
+                        message_title=row[col.index("title")],
+                        link=self.get_shorten_url(row[col.index("link")]),
+                        published=row[col.index("published")],
+                    ),
+                )
+            )
 
     def main(self):
         try:
@@ -510,7 +556,7 @@ class BCFinder:
         if isinstance(self.message_worker, LineWorker):
             self.message_worker.send_text_message(to="admin", text=text)
         elif isinstance(self.message_worker, DiscordWorker):
-            pass
+            asyncio.run(self.message_worker.send_message(to="admin", text=text))
 
     def run_all(self):
         for worker in self.workers:
@@ -526,7 +572,7 @@ class BCFinder:
 
 if __name__ == "__main__":
     bcfinder = BCFinder(
-        db=DB, message_worker=LineWorker, workers=["中山國中", "玉成國小", "三民國中"]
+        db=DB, message_worker=DiscordWorker, workers=["中山國中", "玉成國小", "三民國中"]
     )
     schedule.every(CONFIG.get("default_schedule_job_interval")).seconds.do(
         bcfinder.run_all
