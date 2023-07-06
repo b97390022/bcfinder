@@ -158,8 +158,8 @@ class LineWorker:
 class DiscordWorker:
     def __init__(self) -> None:
         self.token: str = CONFIG.get("discord_token")
-        self.admin_channel_id: int = 1123490073900494938
-        self.channel_id: int = 1118431548023250966
+        self.admin_channel_id: int = 1126352290492723322
+        self.channel_id: int = 1125437819607863307
 
     def format_message(
         self,
